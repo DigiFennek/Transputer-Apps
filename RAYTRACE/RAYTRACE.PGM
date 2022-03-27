@@ -1,0 +1,59 @@
+VAL K IS 1024 :
+VAL COUNT IS 28 :
+[COUNT]NODE transputer :
+ARC hostlink :
+
+NETWORK
+  DO
+    DO i = 0 FOR 4
+      SET transputer[i] (type, memsize := "T800", 1024*K)
+
+    DO i = 4 FOR COUNT - 4
+      SET transputer[i] (type, memsize := "T800", 128*K)
+
+    CONNECT transputer[0][link][0] TO HOST WITH hostlink
+
+    DO i = 0 FOR COUNT - 1
+      CONNECT transputer[i][link][2] TO transputer[i + 1][link][1]
+
+    DO i = 0 FOR COUNT - 4
+      CONNECT transputer[i][link][3] TO transputer[i + 4][link][0]
+:
+
+#INCLUDE "hostio.inc"
+
+#USE "framebuf.c8h"
+#USE "cntlsys.c8h"
+#USE "raytrace.c8h"
+
+CONFIG
+  CHAN OF SP fs, ts :
+  PLACE fs, ts ON hostlink :
+  
+  [COUNT]CHAN OF ANY forward, back :
+  
+  CHAN OF ANY graphics, loopback :
+  CHAN OF INT image :
+
+  VAL true      IS #FFFF :
+  VAL false     IS #0000 :
+
+  PAR
+    PROCESSOR transputer[0]
+      frameBuffer (fs, ts, graphics, image, COUNT - 1, 50, 34500, 0, 25000000)
+
+    PROCESSOR transputer[0]
+      controlSystem (forward[0], back[0], graphics, image, COUNT - 1)
+        
+    PAR i = 0 FOR COUNT - 2
+      PROCESSOR transputer[i + 1]
+        rayTraceT8 (forward[i], back[i], back[i + 1], forward[i + 1], true, i)
+
+    VAL i IS COUNT - 2 :
+    PROCESSOR transputer[i + 1]
+      rayTraceT8 (forward [i], back[i], loopback, loopback, false, i)
+:
+--}}}
+  
+
+

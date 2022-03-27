@@ -1,0 +1,120 @@
+#INCLUDE "mandel.inc"
+
+PROC worker (CHAN OF PIPE from.prev, to.next,
+	     CHAN OF PIPE from.next, to.prev)
+
+  --{{{  PROC throughput
+  PROC throughput (CHAN OF PIPE from.prev, to.next, to.local, req.more)
+    BOOL busy, buffered :
+    [ORDER.SIZE]INT order, buffered.order :
+  
+    SEQ
+      busy := FALSE
+      buffered := FALSE
+  
+      WHILE TRUE
+	ALT
+	  req.more ? CASE
+	    --{{{  
+	    pipe.request
+	      IF
+		buffered
+		  SEQ
+		    to.local ! pipe.order; buffered.order
+		    buffered := FALSE
+		TRUE
+		  busy := FALSE
+	    --}}}  
+	  from.prev ? CASE
+	    --{{{  
+	    pipe.order; order
+	      IF
+		NOT busy
+		  SEQ
+		    to.local ! pipe.order; order
+		    busy := TRUE
+		busy AND buffered
+		  to.next ! pipe.order; order
+		busy AND (NOT buffered)
+		  SEQ
+		    buffered.order := order
+		    buffered := TRUE
+	    --}}}  
+  :
+  --}}}  
+  --{{{  PROC render
+  PROC render (CHAN OF PIPE to.render, from.render, req.more)
+  
+    --{{{  vars
+    [ORDER.SIZE]INT order :
+    [RESULT.SIZE]INT result :
+    REAL32 zr, zi, real, imag, size :
+    INT cnt :
+    --}}}  
+  
+    WHILE TRUE
+      SEQ
+	to.render ? CASE pipe.order; order
+  
+	--{{{  abbrevs
+	[]BYTE buffer RETYPES [result FROM 1 FOR (RESULT.SIZE - 1)] :
+	REAL32 c.real RETYPES order[0] :
+	REAL32 c.imag RETYPES order[1] :
+	REAL32 c.step RETYPES order[2] :
+	VAL INT limit IS order[3] :
+	VAL INT y IS order[4] :
+	VAL INT x.wide IS order[5] :
+	--}}}  
+  
+	SEQ
+	  result[0] := y
+	  c.imag := c.imag + ((REAL32 ROUND y) * c.step)
+  
+	  SEQ x = 0 FOR x.wide
+	    --{{{  compute one pixel
+	    SEQ
+	      zr := 0.0(REAL32)
+	      zi, real, imag, size := zr, zr, zr, zr
+	      cnt := 0
+	      WHILE ((cnt < (limit - 1)) AND (size < 4.0(REAL32)))
+		SEQ
+		  zi   := ((2.0(REAL32) * zr) * zi) + c.imag
+		  zr   := (real - imag) + c.real
+		  real := zr * zr
+		  imag := zi * zi
+		  cnt  := cnt + 1
+		  size := real + imag
+	      buffer[x] := BYTE (cnt /\ 255)
+	      c.real := c.real + c.step
+	    --}}}  
+  
+	from.render ! pipe.result; result
+	req.more ! pipe.request
+  :
+  --}}}  
+  --{{{  PROC feedback
+  PROC feedback (CHAN OF PIPE from.next, from.local, to.prev)
+    [RESULT.SIZE]INT result :
+  
+    WHILE TRUE
+      ALT
+	from.next ? CASE
+	  pipe.result; result
+	    to.prev ! pipe.result; result
+  
+	from.local ? CASE
+	  pipe.result; result
+	    to.prev ! pipe.result; result
+  :
+  --}}}  
+
+  CHAN OF PIPE to.local, from.local, req.more :
+
+  PRI PAR
+    PAR
+      throughput (from.prev, to.next, to.local, req.more)
+      feedback (from.next, from.local, to.prev)
+
+    render (to.local, from.local, req.more)
+:
+

@@ -1,0 +1,123 @@
+#INCLUDE "hostio.inc"
+#INCLUDE "msdos.inc"
+
+#USE "hostio.lib"
+#USE "msdos.lib"
+
+--{{{  PROC pc.display.mode
+PROC pc.display.mode (CHAN OF SP fs, ts, VAL INT mode)
+  [40]BYTE regs.in, regs.out :
+  BYTE carry, result :
+  SEQ
+    regs.in[0] := #02(BYTE) -- AL 
+    regs.in[1] := #4F(BYTE) -- AH (VESA Call)
+    regs.in[4] := BYTE (mode \ 256) -- BL
+    regs.in[5] := BYTE (mode / 256) -- BH
+    dos.call.interrupt (fs, ts, #10(INT16), regs.in, carry, regs.out, result)
+:
+--}}}  
+--{{{  PROC pc.rgb.palette
+PROC pc.rgb.palette (CHAN OF SP fs, ts, VAL INT color, red, green, blue)
+  [40]BYTE regs.in, regs.out :
+  BYTE carry, result :
+  SEQ
+    regs.in[0] := #10(BYTE)  -- AL
+    regs.in[1] := #10(BYTE)  -- AH
+    regs.in[4] := BYTE color -- BL
+    regs.in[5] := 0(BYTE)    -- BH
+    regs.in[8] := BYTE blue  -- CL
+    regs.in[9] := BYTE green -- CH
+    regs.in[12] := 0(BYTE)   -- DL
+    regs.in[13] := BYTE red  -- DH
+    dos.call.interrupt (fs, ts, #10(INT16), regs.in, carry, regs.out, result)
+:
+--}}}  
+--{{{  PROC pc.set.video.memory.window
+PROC pc.set.video.memory.window (CHAN OF SP fs, ts, VAL INT window, INT old)
+  [40]BYTE regs.in, regs.out :
+  BYTE carry, result :
+  SEQ
+    IF
+      old <> window
+        SEQ
+          regs.in[0] := #05(BYTE)  -- AL
+          regs.in[1] := #4F(BYTE)  -- AH (VESA Call)
+          regs.in[4] := #00(BYTE)  -- BL
+          regs.in[5] := #00(BYTE)  -- BH
+          regs.in[8] := #00(BYTE)  -- CL
+          regs.in[9] := #00(BYTE)  -- CH
+          regs.in[12] := BYTE window -- DL
+          regs.in[13] := #00(BYTE) -- DH
+          dos.call.interrupt (fs, ts, #10(INT16), regs.in, carry, regs.out, result)
+          old := window
+      TRUE
+        SKIP
+:
+--}}}  
+--{{{  PROC pc.move.mem
+PROC pc.move.mem (CHAN OF SP fs, ts, VAL INT32 address, VAL []BYTE data, VAL INT count)
+  BYTE result :
+  INT size, offset :    
+  SEQ
+    offset := 0
+    WHILE offset < count
+      SEQ
+        size := count - offset
+        IF
+          size > dos.max.send.block.buffer.size
+            size := dos.max.send.block.buffer.size
+          TRUE
+            SKIP
+        INT block.size :          
+        SEQ
+          block.size := size
+          VAL block IS [data FROM offset FOR block.size] :
+          SEQ
+            dos.send.block (fs, ts, address + (INT32 offset), block, size, result)
+        offset := offset + size
+:
+--}}}  
+--{{{  PROC pc.write.pixels
+PROC pc.write.pixels (CHAN OF SP fs, ts, VAL INT x, y, x.wide, VAL []BYTE pixels, VAL INT count, INT window)
+  INT32 address, segment :
+  INT32 offset, end.offset :
+  INT count.1, count.2 :
+  SEQ  
+    address := (INT32 x) + ((INT32 y) * (INT32 x.wide))
+    segment := address >> 16
+    
+    offset := address /\ #0000FFFF(INT32)
+    end.offset := offset + (INT32 count)
+    
+    IF 
+      end.offset >= #00010000(INT32)
+        SEQ
+          count.1 := INT (#00010000(INT32) - offset)
+          count.2 := INT (end.offset - #00010000(INT32))
+      TRUE
+        SEQ
+	  count.1 := count
+          count.2 := 0        
+
+    pc.set.video.memory.window(fs, ts, INT segment, window)
+    INT block.size :          
+    SEQ
+      block.size := count.1
+      VAL block IS [pixels FROM 0 FOR block.size] :
+      SEQ
+        pc.move.mem (fs, ts, #A0000000(INT32) + offset, block, count.1)
+
+    IF
+      count.2 > 0
+        SEQ
+	  pc.set.video.memory.window(fs, ts, (INT segment) + 1, window)
+          INT block.size :          
+          SEQ
+            block.size := count.2
+            VAL block IS [pixels FROM count.1 FOR block.size] :
+            SEQ
+              pc.move.mem (fs, ts, #A0000000(INT32), block, count.2)
+      TRUE
+        SKIP
+:
+--}}}  

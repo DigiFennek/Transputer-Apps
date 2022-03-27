@@ -1,0 +1,87 @@
+#INCLUDE "hostio.inc"
+#INCLUDE "msdos.inc"
+#INCLUDE "mandel.inc"
+
+PROC master (CHAN OF SP fs, ts,
+             CHAN OF PIPE to.worker, from.worker, VAL INT workers)
+
+  #USE "hostio.lib"
+  #USE "msdos.lib"
+  #USE "pcvga.t8h"
+
+  INT vga.memory.window :
+
+  --{{{  PROC compute.mandelbrot
+  PROC compute.mandelbrot ()
+    --{{{  vars
+    [RESULT.SIZE]INT result :
+    REAL32 real, imag, step :
+    INT work.y, x.wide, y.wide, limit :
+    --}}}
+    SEQ
+      --{{{  init vars
+      real, imag, step := -0.5(REAL32), 0.0(REAL32), 3.0(REAL32)
+      x.wide := X.WIDE
+      y.wide := Y.WIDE
+
+      real := real - (step / 2.0(REAL32))
+      imag := imag - ((step * (REAL32 ROUND y.wide)) /
+               (2.0(REAL32) * (REAL32 ROUND x.wide)))
+      step  := step / (REAL32 ROUND x.wide)
+
+      limit := 256
+      work.y := 0
+      --}}}
+      --{{{  retypes
+      INT i.real RETYPES real :
+      INT i.imag RETYPES imag :
+      INT i.step RETYPES step :
+      --}}}
+      SEQ
+        --{{{  send first (workers * 2) orders
+        SEQ i = 0 FOR workers * 2
+          SEQ
+            to.worker ! pipe.order; [i.real, i.imag, i.step, limit, work.y, x.wide]
+            work.y := work.y + 1
+        --}}}
+        --{{{  send next orders, display result
+        SEQ i = 0 FOR y.wide
+          from.worker ? CASE
+            pipe.result; result
+              SEQ
+                --{{{  display result
+                VAL INT y IS result[0] :
+                [X.WIDE]BYTE buffer RETYPES [result FROM 1 FOR (RESULT.SIZE - 1)] :
+                SEQ
+                  pc.write.pixels(fs, ts, 0, y, X.WIDE, buffer, x.wide, vga.memory.window)
+                --}}}
+                --{{{  send next order
+                IF
+                  work.y < y.wide
+                    SEQ
+                      to.worker ! pipe.order; [i.real, i.imag, i.step, limit, work.y, x.wide]
+                      work.y := work.y + 1
+                  TRUE
+                    SKIP
+                --}}}
+        --}}}
+  :
+  --}}}
+
+  SEQ
+    --{{{  enter vga 640x480x8 mode
+    pc.display.mode (fs, ts, #0101)
+    --}}}
+
+    compute.mandelbrot ()
+
+    --{{{  wait for keyboard hit
+    BYTE key, result :
+    so.getkey (fs, ts, key, result)
+    --}}}
+    --{{{  enter text mode
+    pc.display.mode (fs, ts, #03)
+    --}}}
+
+    so.exit (fs, ts, sps.success)
+:
